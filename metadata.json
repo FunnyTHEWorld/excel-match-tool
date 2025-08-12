@@ -1,0 +1,5 @@
+{
+  "name": "Excel Column Match & Update Tool",
+  "description": "An application to update one Excel sheet based on matching columns from another. Upload two files, select key and value columns, and the tool will find matches and write data accordingly, providing a detailed report.",
+  "requestFramePermissions": []
+}
