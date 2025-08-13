@@ -1,5 +1,5 @@
 {
-  "name": "Excel Column Match & Update Tool",
-  "description": "An application to update one Excel sheet based on matching columns from another. Upload two files, select key and value columns, and the tool will find matches and write data accordingly, providing a detailed report.",
+  "name": "Excel 列匹配与更新工具",
+  "description": "一个根据另一张 Excel 表格中的匹配列来更新当前表格的应用程序。上传两个文件，选择键列和值列，该工具将查找匹配项并相应地写入数据，并提供详细的报告。",
   "requestFramePermissions": []
 }

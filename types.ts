@@ -5,11 +5,26 @@ export interface ParsedExcelData {
   headers: string[];
   rows: ExcelRow[];
   fileName: string;
+  merges?: { s: { r: number; c: number }; e: { r: number; c: number } }[];
+}
+
+export interface MismatchedData {
+  key: string | number | boolean | null;
+  leftValue: string | number | boolean | null;
+  rightValue: string | number | boolean | null;
+  a_row: ExcelRow;
 }
 
 export interface Report {
-  writes: number;
+  isAudit: boolean;
+  writes?: number;
   notFound: (string | number | boolean | null)[];
+  matches?: number;
+  mismatches?: number;
+  mismatchedData?: MismatchedData[];
+  a_headers?: string[];
+  a2_header?: string;
+  b2_header?: string;
 }
 
 export interface ColumnSelectorSpec {

@@ -1,6 +1,5 @@
-
 import React, { useState, useCallback } from 'react';
-import type { ParsedExcelData, Report, ExcelRow, ColumnSelectorSpec } from './types';
+import type { ParsedExcelData, Report, ExcelRow, ColumnSelectorSpec, MismatchedData } from './types';
 import ExcelProcessorPanel from './components/ExcelProcessorPanel';
 import ReportModal from './components/ReportModal';
 import { ProcessingSpinner, DownloadIcon } from './components/icons';
@@ -10,22 +9,36 @@ declare var XLSX: any;
 
 const CREATE_NEW_COLUMN = 'CREATE_NEW_COLUMN';
 
+// Helper to check if a cell is part of a merged range, but not the primary cell
+const isSkippedMergedCell = (rowIndex: number, colIndex: number, merges: ParsedExcelData['merges']) => {
+  if (!merges || colIndex === -1) return false;
+  // XLSX rows are 1-based, our data is 0-based
+  const r = rowIndex + 1;
+  for (const merge of merges) {
+    if (r >= merge.s.r && r <= merge.e.r && colIndex >= merge.s.c && colIndex <= merge.e.c) {
+      // It's in a merged range. Is it the top-left (primary) cell?
+      if (r === merge.s.r && colIndex === merge.s.c) {
+        return false; // It's the primary cell, don't skip
+      }
+      return true; // It's a secondary merged cell, skip it
+    }
+  }
+  return false;
+};
+
 function App() {
   const [leftData, setLeftData] = useState<ParsedExcelData | null>(null);
   const [rightData, setRightData] = useState<ParsedExcelData | null>(null);
 
   const [a1, setA1] = useState(''); // Left Key
-  const [a2, setA2] = useState(''); // Left Value (to be written to)
+  const [a2, setA2] = useState(''); // Left Value (to be written to or compared)
   const [b1, setB1] = useState(''); // Right Key
   const [b2, setB2] = useState(''); // Right Value (source)
 
-  const [startRow, setStartRow] = useState('');
-  const [endRow, setEndRow] = useState('');
-
-  const [skipIfFilled, setSkipIfFilled] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [report, setReport] = useState<Report | null>(null);
   const [showReport, setShowReport] = useState(false);
+  const [isAuditMode, setIsAuditMode] = useState(false);
   
   const isProcessReady = leftData && rightData && a1 && a2 && b1 && b2;
 
@@ -37,76 +50,105 @@ function App() {
 
     setTimeout(() => {
         try {
-            const firstRow = startRow ? parseInt(startRow, 10) : 1;
-            const lastRow = endRow ? parseInt(endRow, 10) : leftData.rows.length;
-
-            if (
-                isNaN(firstRow) || 
-                isNaN(lastRow) || 
-                firstRow < 1 ||
-                lastRow > leftData.rows.length ||
-                firstRow > lastRow
-            ) {
-                alert('行范围无效。请确保开始行不大于结束行，且范围在数据行数内。');
-                setIsProcessing(false);
-                return;
-            }
-
-            const startIndex = firstRow - 1;
-            const endIndex = lastRow;
-
-            let targetColumn = a2;
-            let finalHeaders = [...leftData.headers];
-            
-            if (a2 === CREATE_NEW_COLUMN) {
-                let newColName = `${a1} (已更新)`;
-                let counter = 1;
-                while (finalHeaders.includes(newColName)) {
-                    newColName = `${a1} (已更新) ${counter++}`;
-                }
-                targetColumn = newColName;
-                
-                const a1Index = finalHeaders.indexOf(a1);
-                finalHeaders.splice(a1Index + 1, 0, targetColumn);
-            }
-
             const valueMap = new Map<any, any>();
-            rightData.rows.forEach(row => {
+            const b1_col_idx = rightData.headers.indexOf(b1);
+            const b2_col_idx = rightData.headers.indexOf(b2);
+
+            rightData.rows.forEach((row, index) => {
+                if (isSkippedMergedCell(index, b1_col_idx, rightData.merges) || isSkippedMergedCell(index, b2_col_idx, rightData.merges)) {
+                    return; // Skip this row
+                }
                 valueMap.set(row[b1], row[b2]);
             });
 
-            let writes = 0;
             const foundKeys = new Set<any>();
 
-            const newLeftRows = leftData.rows.map((row, index) => {
-                if (index < startIndex || index >= endIndex) {
-                    return row; // Not in range, return original row
-                }
+            if (isAuditMode) {
+                // --- AUDIT LOGIC ---
+                let matches = 0;
+                let mismatches = 0;
+                const mismatchedData: MismatchedData[] = [];
+                const a1_col_idx = leftData.headers.indexOf(a1);
+                const a2_col_idx = leftData.headers.indexOf(a2);
 
-                const newRow = { ...row };
-                const key = newRow[a1];
-                if (valueMap.has(key)) {
-                    foundKeys.add(key);
-                    const valueToWrite = valueMap.get(key);
-                    
-                    const targetCellHasData = newRow[targetColumn] != null && String(newRow[targetColumn]).trim() !== '';
-
-                    if (!skipIfFilled || !targetCellHasData) {
-                      if (newRow[targetColumn] !== valueToWrite) {
-                          writes++;
-                      }
-                      newRow[targetColumn] = valueToWrite;
+                leftData.rows.forEach((row, index) => {
+                    if (isSkippedMergedCell(index, a1_col_idx, leftData.merges) || isSkippedMergedCell(index, a2_col_idx, leftData.merges)) {
+                        return; // Skip this row
                     }
+                    const key = row[a1];
+                    if (valueMap.has(key)) {
+                        const rightValue = valueMap.get(key);
+                        const leftValue = row[a2];
+                        if (leftValue === rightValue) {
+                            matches++;
+                        } else {
+                            mismatches++;
+                            mismatchedData.push({ key, leftValue, rightValue, a_row: row });
+                        }
+                        foundKeys.add(key);
+                    }
+                });
+                
+                const b1Values = rightData.rows.map(row => row[b1]);
+                const notFound = b1Values.filter(key => !foundKeys.has(key));
+                const uniqueNotFound = Array.from(new Set(notFound));
+
+                setReport({
+                    isAudit: true,
+                    matches,
+                    mismatches,
+                    notFound: uniqueNotFound,
+                    mismatchedData,
+                    a_headers: leftData.headers,
+                    a2_header: a2,
+                    b2_header: b2,
+                });
+
+            } else {
+                // --- UPDATE LOGIC (Original) ---
+                let targetColumn = a2;
+                let finalHeaders = [...leftData.headers];
+                
+                if (a2 === CREATE_NEW_COLUMN) {
+                    let newColName = `${a1} (已更新)`;
+                    let counter = 1;
+                    while (finalHeaders.includes(newColName)) {
+                        newColName = `${a1} (已更新) ${counter++}`;
+                    }
+                    targetColumn = newColName;
+                    
+                    const a1Index = finalHeaders.indexOf(a1);
+                    finalHeaders.splice(a1Index + 1, 0, targetColumn);
                 }
-                return newRow;
-            });
 
-            const b1Values = rightData.rows.map(row => row[b1]);
-            const notFound = b1Values.filter(key => !foundKeys.has(key));
-            const uniqueNotFound = Array.from(new Set(notFound));
+                let writes = 0;
+                const a1_col_idx = leftData.headers.indexOf(a1);
+                const a2_col_idx = leftData.headers.indexOf(targetColumn); // Use targetColumn for index
 
-            setLeftData({ ...leftData, headers: finalHeaders, rows: newLeftRows });
-            setReport({ writes, notFound: uniqueNotFound });
+                const newLeftRows = leftData.rows.map((row, index) => {
+                    if (isSkippedMergedCell(index, a1_col_idx, leftData.merges) || isSkippedMergedCell(index, a2_col_idx, leftData.merges)) {
+                        return row; // Skip this row, return original
+                    }
+                    const newRow = { ...row };
+                    const key = newRow[a1];
+                    if (valueMap.has(key)) {
+                        const valueToWrite = valueMap.get(key);
+                        if(newRow[targetColumn] !== valueToWrite) {
+                            writes++;
+                        }
+                        newRow[targetColumn] = valueToWrite;
+                        foundKeys.add(key);
+                    }
+                    return newRow;
+                });
+
+                const b1Values = rightData.rows.map(row => row[b1]);
+                const notFound = b1Values.filter(key => !foundKeys.has(key));
+                const uniqueNotFound = Array.from(new Set(notFound));
+
+                setLeftData({ ...leftData, headers: finalHeaders, rows: newLeftRows });
+                setReport({ isAudit: false, writes, notFound: uniqueNotFound });
+            }
             setShowReport(true);
         } catch(e) {
             alert(`处理过程中发生错误： ${e instanceof Error ? e.message : String(e)}`);
@@ -115,7 +157,7 @@ function App() {
         }
     }, 100);
 
-  }, [isProcessReady, leftData, rightData, a1, a2, b1, b2, skipIfFilled, startRow, endRow]);
+  }, [isProcessReady, leftData, rightData, a1, a2, b1, b2, isAuditMode]);
 
   const handleDownload = () => {
     if (!leftData) return;
@@ -130,8 +172,6 @@ function App() {
     setLeftData(data);
     setA1('');
     setA2('');
-    setStartRow('');
-    setEndRow('');
     setReport(null);
   };
 
@@ -141,22 +181,36 @@ function App() {
     setB2('');
     setReport(null);
   };
+
+  const handleLeftClear = () => {
+    setLeftData(null);
+    setA1('');
+    setA2('');
+    setReport(null);
+  };
+
+  const handleRightClear = () => {
+    setRightData(null);
+    setB1('');
+    setB2('');
+    setReport(null);
+  };
   
   const leftColumnSelectors: ColumnSelectorSpec[] = [
     { label: '匹配此列 (a1)', value: a1, onChange: setA1, id: 'a1', disabled: !leftData },
     { 
-      label: '将值写入此列 (a2)', 
+      label: isAuditMode ? '比较此列 (a2)' : '将值写入此列 (a2)', 
       value: a2, 
       onChange: setA2, 
       id: 'a2',
       disabled: !leftData || !a1,
-      specialOptions: a1 ? [{ value: CREATE_NEW_COLUMN, label: `在“${a1}”旁边创建新列` }] : [],
+      specialOptions: a1 && !isAuditMode ? [{ value: CREATE_NEW_COLUMN, label: `在“${a1}”旁边创建新列` }] : [],
     },
   ];
 
   const rightColumnSelectors: ColumnSelectorSpec[] = [
     { label: '使用此列进行匹配 (b1)', value: b1, onChange: setB1, id: 'b1', disabled: !rightData },
-    { label: '从此列获取值 (b2)', value: b2, onChange: setB2, id: 'b2', disabled: !rightData || !b1 },
+    { label: isAuditMode ? '比较此列的值 (b2)' : '从此列获取值 (b2)', value: b2, onChange: setB2, id: 'b2', disabled: !rightData || !b1 },
   ];
 
   return (
@@ -165,7 +219,7 @@ function App() {
         <header className="text-center mb-8">
           <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Excel 列匹配与更新</h1>
           <p className="mt-2 text-lg text-slate-600 max-w-3xl mx-auto">
-            根据另一张表格中的匹配值更新当前表格中的列。
+            根据另一张表格中的匹配值更新或审查当前表格中的列。
           </p>
         </header>
 
@@ -174,81 +228,57 @@ function App() {
             <ExcelProcessorPanel
               title="表格 A (目标)"
               onFileParsed={handleLeftFileParsed}
+              onClear={handleLeftClear}
               parsedData={leftData}
               columnSelectors={leftColumnSelectors}
               bgColor="bg-white"
-              rangeConfig={{
-                  startRow,
-                  setStartRow,
-                  endRow,
-                  setEndRow,
-                  disabled: !leftData,
-                  maxRows: leftData?.rows.length || 0,
-              }}
             />
             <ExcelProcessorPanel
               title="表格 B (源)"
               onFileParsed={handleRightFileParsed}
+              onClear={handleRightClear}
               parsedData={rightData}
               columnSelectors={rightColumnSelectors}
               bgColor="bg-white"
             />
           </div>
 
-          <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="text-slate-600 flex-grow">
-                  <h3 className="font-bold text-lg text-slate-800">准备好处理了吗？</h3>
-                  <p className="text-sm">请确保所有四列都已选定。</p>
-              </div>
-              <div className="flex items-center gap-4 flex-shrink-0">
-                {report && (
-                   <button
-                      onClick={handleDownload}
-                      className="flex items-center gap-2 px-5 py-3 border border-transparent text-base font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-                    >
-                      <DownloadIcon className="h-5 w-5" />
-                      下载更新后的表格 A
-                    </button>
-                )}
-                <button
-                  onClick={handleProcess}
-                  disabled={!isProcessReady || isProcessing}
-                  className="flex items-center gap-2 justify-center w-48 px-5 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
-                >
-                  {isProcessing ? (
-                    <>
-                      <ProcessingSpinner className="h-5 w-5"/>
-                      <span>处理中...</span>
-                    </>
-                  ) : (
-                    <span>处理数据</span>
-                  )}
-                </button>
-              </div>
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+                <label htmlFor="audit-toggle" className="flex items-center cursor-pointer">
+                    <span className={`mr-3 text-sm font-medium ${!isAuditMode ? 'text-indigo-600' : 'text-slate-500'}`}>更新模式</span>
+                    <div className="relative">
+                        <input type="checkbox" id="audit-toggle" className="sr-only" checked={isAuditMode} onChange={() => setIsAuditMode(!isAuditMode)} />
+                        <div className="block bg-slate-200 w-14 h-8 rounded-full"></div>
+                        <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${isAuditMode ? 'transform translate-x-full bg-indigo-600' : ''}`}></div>
+                    </div>
+                    <span className={`ml-3 text-sm font-medium ${isAuditMode ? 'text-indigo-600' : 'text-slate-500'}`}>审查模式</span>
+                </label>
             </div>
-            <div className="mt-4 pt-4 border-t border-slate-200">
-                <div className="relative flex items-start">
-                    <div className="flex h-6 items-center">
-                        <input
-                          id="skip-overwrite"
-                          aria-describedby="skip-overwrite-description"
-                          name="skip-overwrite"
-                          type="checkbox"
-                          checked={skipIfFilled}
-                          onChange={e => setSkipIfFilled(e.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                    </div>
-                    <div className="ml-3 text-sm leading-6">
-                        <label htmlFor="skip-overwrite" className="font-medium text-slate-900">
-                            不覆盖数据
-                        </label>
-                        <p id="skip-overwrite-description" className="text-slate-500">
-                            如果目标单元格已有数据则跳过写入。
-                        </p>
-                    </div>
-                </div>
+            <div className="flex items-center gap-4">
+              {report && !report.isAudit && (
+                 <button
+                    onClick={handleDownload}
+                    className="flex items-center gap-2 px-5 py-3 border border-transparent text-base font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+                  >
+                    <DownloadIcon className="h-5 w-5" />
+                    下载更新后的表格 A
+                  </button>
+              )}
+              <button
+                onClick={handleProcess}
+                disabled={!isProcessReady || isProcessing}
+                className="flex items-center gap-2 justify-center w-48 px-5 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+              >
+                {isProcessing ? (
+                  <>
+                    <ProcessingSpinner className="h-5 w-5"/>
+                    <span>处理中...</span>
+                  </>
+                ) : (
+                  <span>{isAuditMode ? '开始审查' : '处理数据'}</span>
+                )}
+              </button>
             </div>
           </div>
         </main>

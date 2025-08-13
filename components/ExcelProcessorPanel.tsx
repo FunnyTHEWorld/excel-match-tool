@@ -1,30 +1,21 @@
 
 import React, { useState, useRef, useCallback, ChangeEvent } from 'react';
 import type { ParsedExcelData, ExcelRow, ColumnSelectorSpec } from '../types';
-import { UploadIcon, ExcelIcon } from './icons';
+import { UploadIcon, ExcelIcon, XIcon } from './icons';
 
 // XLSX is globally available from the script tag in index.html
 declare var XLSX: any;
 
-interface RangeConfig {
-    startRow: string;
-    setStartRow: (value: string) => void;
-    endRow: string;
-    setEndRow: (value: string) => void;
-    disabled: boolean;
-    maxRows: number;
-}
-
 interface ExcelProcessorPanelProps {
   title: string;
   onFileParsed: (data: ParsedExcelData) => void;
+  onClear: () => void;
   parsedData: ParsedExcelData | null;
   columnSelectors: ColumnSelectorSpec[];
   bgColor: string;
-  rangeConfig?: RangeConfig;
 }
 
-const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFileParsed, parsedData, columnSelectors, bgColor, rangeConfig }) => {
+const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFileParsed, onClear, parsedData, columnSelectors, bgColor }) => {
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -50,7 +41,8 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
         }
         
         const headers = Object.keys(json[0]);
-        onFileParsed({ headers, rows: json, fileName: file.name });
+        const merges = worksheet['!merges'] || [];
+        onFileParsed({ headers, rows: json, fileName: file.name, merges });
       } catch (err) {
         setError(err instanceof Error ? err.message : "解析过程中发生未知错误。");
         onFileParsed({ headers: [], rows: [], fileName: '' });
@@ -65,11 +57,6 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
     }
 
     reader.readAsArrayBuffer(file);
-
-    // Reset input value to allow re-uploading the same file
-    if (event.target) {
-      event.target.value = '';
-    }
   }, [onFileParsed]);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -91,17 +78,7 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
     }
     
     if (error) {
-        return (
-            <div className="text-center p-8 text-red-600 flex flex-col items-center justify-center h-full">
-                <p>{error}</p>
-                <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="mt-4 px-4 py-2 bg-indigo-100 text-indigo-700 font-semibold rounded-lg shadow-sm hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
-                >
-                    重试
-                </button>
-            </div>
-        );
+        return <div className="text-center p-8 text-red-600">{error}</div>;
     }
 
     if (!parsedData || parsedData.rows.length === 0) {
@@ -115,6 +92,7 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
           <UploadIcon className="w-12 h-12 text-slate-400 mb-4" />
           <p className="text-slate-600 font-semibold">点击浏览或拖放</p>
           <p className="text-sm text-slate-500">您的 .xlsx 或 .csv 文件</p>
+          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".xlsx, .xls, .csv" />
         </div>
       );
     }
@@ -122,15 +100,12 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
     return (
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200">
-            <div className="flex items-center gap-3 min-w-0">
-                 <ExcelIcon className="h-6 w-6 text-green-600 flex-shrink-0"/>
-                 <p className="font-semibold text-slate-700 truncate" title={parsedData.fileName}>{parsedData.fileName}</p>
+            <div class="flex items-center gap-3 min-w-0">
+                <ExcelIcon className="h-6 w-6 text-green-600 flex-shrink-0"/>
+                <p className="font-semibold text-slate-700 truncate">{parsedData.fileName}</p>
             </div>
-            <button
-                onClick={() => fileInputRef.current?.click()}
-                className="text-sm font-medium text-indigo-600 hover:text-indigo-500 focus:outline-none focus:underline flex-shrink-0 whitespace-nowrap"
-            >
-                重新上传
+            <button onClick={onClear} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full">
+                <XIcon className="h-5 w-5"/>
             </button>
         </div>
         <div className="space-y-3">
@@ -151,44 +126,6 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
             </div>
           ))}
         </div>
-
-        {rangeConfig && (
-            <div className="pt-4 mt-4 border-t border-slate-200">
-                <h4 className="text-sm font-semibold text-slate-600 mb-2">指定修改范围 (可选)</h4>
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <label htmlFor="start-row" className="block text-sm font-medium text-slate-600 mb-1">开始行</label>
-                        <input
-                            type="number"
-                            id="start-row"
-                            min="1"
-                            max={rangeConfig.maxRows || undefined}
-                            value={rangeConfig.startRow}
-                            onChange={(e) => rangeConfig.setStartRow(e.target.value)}
-                            disabled={rangeConfig.disabled}
-                            placeholder="第 1 行"
-                            className="w-full p-2 border border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition disabled:bg-slate-100"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="end-row" className="block text-sm font-medium text-slate-600 mb-1">结束行</label>
-                        <input
-                            type="number"
-                            id="end-row"
-                            min={rangeConfig.startRow || "1"}
-                            max={rangeConfig.maxRows || undefined}
-                            value={rangeConfig.endRow}
-                            onChange={(e) => rangeConfig.setEndRow(e.target.value)}
-                            disabled={rangeConfig.disabled}
-                            placeholder={`共 ${rangeConfig.maxRows} 行`}
-                            className="w-full p-2 border border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition disabled:bg-slate-100"
-                        />
-                    </div>
-                </div>
-                <p className="text-xs text-slate-500 mt-2">仅处理指定数据行范围内的数据。留空则处理所有行。</p>
-            </div>
-        )}
-
         <div className="mt-4">
             <h4 className="text-sm font-semibold text-slate-600 mb-2">数据预览 (前 5 行)</h4>
             <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
@@ -215,7 +152,6 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
   return (
     <div className={`flex-1 ${bgColor} rounded-xl shadow-lg border border-slate-200 flex flex-col`}>
       <h3 className="text-xl font-bold p-4 border-b border-slate-200 text-slate-800">{title}</h3>
-      <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".xlsx, .xls, .csv" />
       <div className="flex-grow">{renderContent()}</div>
     </div>
   );
