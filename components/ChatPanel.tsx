@@ -48,6 +48,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isApiConfigOpen, setIsApiConfigOpen] = useState(true);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState('');
@@ -149,23 +150,30 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
     <div className="bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[80vh]">
       <h3 className="text-xl font-bold p-4 border-b border-slate-200 text-slate-800">AI 助手</h3>
       
-      <div className="p-4 border-b border-slate-200 space-y-3 bg-slate-50">
-        <h4 className="text-sm font-semibold text-slate-600">API 配置</h4>
-        <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">API Key</label>
-            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="输入您的 API Key"/>
-        </div>
-        <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Base URL</label>
-            <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="例如: https://api.openai.com/v1"/>
-        </div>
-        <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">模型名称</label>
-            <input type="text" value={modelName} onChange={e => setModelName(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="例如: gpt-4, gemini-pro"/>
-        </div>
-        <button onClick={handleSaveConfig} disabled={isSaving} className="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 disabled:bg-slate-400">
-            {isSaving ? '保存中...' : '保存配置'}
+      <div className="border-b border-slate-200 bg-slate-50">
+        <button onClick={() => setIsApiConfigOpen(!isApiConfigOpen)} className="w-full p-4 flex justify-between items-center">
+            <h4 className="text-sm font-semibold text-slate-600">API 配置</h4>
+            <span className={`transform transition-transform duration-200 ${isApiConfigOpen ? 'rotate-180' : ''}`}>▼</span>
         </button>
+        {isApiConfigOpen && (
+            <div className="p-4 pt-0 space-y-3">
+                <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">API Key</label>
+                    <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="输入您的 API Key"/>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Base URL</label>
+                    <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="例如: https://api.openai.com/v1"/>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">模型名称</label>
+                    <input type="text" value={modelName} onChange={e => setModelName(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="例如: gpt-4, gemini-pro"/>
+                </div>
+                <button onClick={handleSaveConfig} disabled={isSaving} className="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 disabled:bg-slate-400">
+                    {isSaving ? '保存中...' : '保存配置'}
+                </button>
+            </div>
+        )}
       </div>
 
       <div ref={chatContainerRef} className="flex-grow p-4 space-y-4 overflow-y-auto">
@@ -214,3 +222,4 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
     </div>
   );
 };
+

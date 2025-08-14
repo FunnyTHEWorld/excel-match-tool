@@ -58,11 +58,11 @@ function App() {
             const b1_col_idx = rightData.headers.indexOf(b1);
             const b2_col_idx = rightData.headers.indexOf(b2);
 
-            rightData.rows.forEach((row, index) => {
+            rightData.rawData.forEach((row, index) => {
                 if (isSkippedMergedCell(index, b1_col_idx, rightData.merges) || isSkippedMergedCell(index, b2_col_idx, rightData.merges)) {
                     return; // Skip this row
                 }
-                valueMap.set(row[b1], row[b2]);
+                valueMap.set(row[b1_col_idx], row[b2_col_idx]);
             });
 
             const foundKeys = new Set<any>();
@@ -75,25 +75,27 @@ function App() {
                 const a1_col_idx = leftData.headers.indexOf(a1);
                 const a2_col_idx = leftData.headers.indexOf(a2);
 
-                leftData.rows.forEach((row, index) => {
+                leftData.rawData.forEach((row, index) => {
                     if (isSkippedMergedCell(index, a1_col_idx, leftData.merges) || isSkippedMergedCell(index, a2_col_idx, leftData.merges)) {
                         return; // Skip this row
                     }
-                    const key = row[a1];
+                    const key = row[a1_col_idx];
                     if (valueMap.has(key)) {
                         const rightValue = valueMap.get(key);
-                        const leftValue = row[a2];
+                        const leftValue = row[a2_col_idx];
                         if (leftValue === rightValue) {
                             matches++;
                         } else {
                             mismatches++;
-                            mismatchedData.push({ key, leftValue, rightValue, a_row: row });
+                            const rowObject: ExcelRow = {};
+                            leftData.headers.forEach((h, i) => rowObject[h] = row[i]);
+                            mismatchedData.push({ key, leftValue, rightValue, a_row: rowObject });
                         }
                         foundKeys.add(key);
                     }
                 });
                 
-                const b1Values = rightData.rows.map(row => row[b1]);
+                const b1Values = rightData.rawData.map(row => row[b1_col_idx]);
                 const notFound = b1Values.filter(key => !foundKeys.has(key));
                 const uniqueNotFound = Array.from(new Set(notFound));
 
@@ -112,7 +114,10 @@ function App() {
                 // --- UPDATE LOGIC (Original) ---
                 let targetColumn = a2;
                 let finalHeaders = [...leftData.headers];
-                
+                let newLeftRawData = leftData.rawData.map(r => [...r]);
+                let newMerges = leftData.merges ? JSON.parse(JSON.stringify(leftData.merges)) : [];
+                let newDataValidations = leftData.dataValidations ? JSON.parse(JSON.stringify(leftData.dataValidations)) : [];
+
                 if (a2 === CREATE_NEW_COLUMN) {
                     let newColName = `${a1} (已更新)`;
                     let counter = 1;
@@ -123,34 +128,68 @@ function App() {
                     
                     const a1Index = finalHeaders.indexOf(a1);
                     finalHeaders.splice(a1Index + 1, 0, targetColumn);
+                    newLeftRawData.forEach(row => row.splice(a1Index + 1, 0, undefined));
+
+                    // Adjust merges for the new column
+                    if (newMerges) {
+                        newMerges.forEach((merge: any) => {
+                            if (merge.s.c > a1Index) {
+                                merge.s.c += 1;
+                            }
+                            if (merge.e.c > a1Index) {
+                                merge.e.c += 1;
+                            }
+                        });
+                    }
+
+                    // Adjust data validations for the new column
+                    if (newDataValidations) {
+                        newDataValidations.forEach((dv: any) => {
+                            const range = XLSX.utils.decode_range(dv.sqref);
+                            if (range.s.c > a1Index) {
+                                range.s.c += 1;
+                            }
+                            if (range.e.c > a1Index) {
+                                range.e.c += 1;
+                            }
+                            dv.sqref = XLSX.utils.encode_range(range);
+                        });
+                    }
                 }
 
                 let writes = 0;
                 const a1_col_idx = leftData.headers.indexOf(a1);
-                const a2_col_idx = leftData.headers.indexOf(targetColumn); // Use targetColumn for index
+                const target_col_idx = finalHeaders.indexOf(targetColumn);
 
-                const newLeftRows = leftData.rows.map((row, index) => {
-                    if (isSkippedMergedCell(index, a1_col_idx, leftData.merges) || isSkippedMergedCell(index, a2_col_idx, leftData.merges)) {
+                newLeftRawData = newLeftRawData.map((row, index) => {
+                    if (isSkippedMergedCell(index, a1_col_idx, leftData.merges) || isSkippedMergedCell(index, target_col_idx, leftData.merges)) {
                         return row; // Skip this row, return original
                     }
-                    const newRow = { ...row };
-                    const key = newRow[a1];
+                    const key = row[a1_col_idx];
                     if (valueMap.has(key)) {
                         const valueToWrite = valueMap.get(key);
-                        if(newRow[targetColumn] !== valueToWrite) {
+                        if(row[target_col_idx] !== valueToWrite) {
                             writes++;
                         }
-                        newRow[targetColumn] = valueToWrite;
+                        row[target_col_idx] = valueToWrite;
                         foundKeys.add(key);
                     }
-                    return newRow;
+                    return row;
                 });
 
-                const b1Values = rightData.rows.map(row => row[b1]);
+                const b1Values = rightData.rawData.map(row => row[b1_col_idx]);
                 const notFound = b1Values.filter(key => !foundKeys.has(key));
                 const uniqueNotFound = Array.from(new Set(notFound));
 
-                setLeftData({ ...leftData, headers: finalHeaders, rows: newLeftRows });
+                const newLeftRows = newLeftRawData.map(row => {
+                    const rowObject: ExcelRow = {};
+                    finalHeaders.forEach((header, i) => {
+                        rowObject[header] = row[i];
+                    });
+                    return rowObject;
+                });
+
+                setLeftData({ ...leftData, headers: finalHeaders, rows: newLeftRows, rawData: newLeftRawData, merges: newMerges, dataValidations: newDataValidations });
                 setReport({ isAudit: false, writes, notFound: uniqueNotFound });
             }
             setShowReport(true);
@@ -165,7 +204,13 @@ function App() {
 
   const handleDownload = () => {
     if (!leftData) return;
-    const worksheet = XLSX.utils.json_to_sheet(leftData.rows, { header: leftData.headers });
+    const worksheet = XLSX.utils.aoa_to_sheet(leftData.rawData);
+    if (leftData.merges) {
+        worksheet['!merges'] = leftData.merges;
+    }
+    if (leftData.dataValidations) {
+        worksheet['!dataValidations'] = leftData.dataValidations;
+    }
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Updated_Sheet');
     const originalName = leftData.fileName.split('.').slice(0, -1).join('.');

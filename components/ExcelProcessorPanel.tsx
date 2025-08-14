@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useCallback, ChangeEvent, useEffect } from 'react';
 import type { ParsedExcelData, ExcelRow, ColumnSelectorSpec, CellSelection } from '../types';
-import { UploadIcon, ExcelIcon, XIcon } from './icons';
+import { UploadIcon, ExcelIcon, XIcon, SearchIcon, FullScreenIcon, ChevronLeftIcon } from './icons';
 
 // XLSX is globally available from the script tag in index.html
 declare var XLSX: any;
@@ -22,17 +22,29 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [previewRows, setPreviewRows] = useState<ExcelRow[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isMaximized, setIsMaximized] = useState(false);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
 
   const PREVIEW_INITIAL_LOAD = 300;
   const PREVIEW_LOAD_MORE = 300;
 
   useEffect(() => {
     if (parsedData) {
-      setPreviewRows(parsedData.rows.slice(0, PREVIEW_INITIAL_LOAD));
+      let filteredRows = parsedData.rows;
+      if (searchTerm) {
+        const lowercasedSearchTerm = searchTerm.toLowerCase();
+        filteredRows = parsedData.rows.filter(row =>
+          Object.values(row).some(value =>
+            String(value).toLowerCase().includes(lowercasedSearchTerm)
+          )
+        );
+      }
+      setPreviewRows(filteredRows.slice(0, PREVIEW_INITIAL_LOAD));
     } else {
       setPreviewRows([]);
     }
-  }, [parsedData]);
+  }, [parsedData, searchTerm]);
 
   const handleCellClick = (r: number, c: number) => {
     const newSelection = new Set(selection);
@@ -100,18 +112,37 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet) as ExcelRow[];
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
 
-        if (json.length === 0) {
+        if (rawData.length === 0) {
           throw new Error("Excel 工作表为空或无法读取。");
         }
         
-        const headers = Object.keys(json[0]);
+        const maxCols = Math.max(...rawData.map(row => row.length));
+        const headers = Array.from({ length: maxCols }, (_, i) => {
+            let header = '';
+            let num = i;
+            while (num >= 0) {
+                header = String.fromCharCode(num % 26 + 65) + header;
+                num = Math.floor(num / 26) - 1;
+            }
+            return header;
+        });
+
+        const rows = rawData.map(row => {
+            const rowObject: ExcelRow = {};
+            headers.forEach((header, i) => {
+                rowObject[header] = row[i];
+            });
+            return rowObject;
+        });
+
         const merges = worksheet['!merges'] || [];
-        onFileParsed({ headers, rows: json, fileName: file.name, merges });
+        const dataValidations = worksheet['!dataValidations'] || [];
+        onFileParsed({ headers, rows, rawData, fileName: file.name, merges, dataValidations });
       } catch (err) {
         setError(err instanceof Error ? err.message : "解析过程中发生未知错误。");
-        onFileParsed({ headers: [], rows: [], fileName: '' });
+        onFileParsed({ headers: [], rows: [], rawData: [], fileName: '' });
       } finally {
         setIsParsing(false);
       }
@@ -138,6 +169,32 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
     }
   };
 
+  const getMergeInfo = (r: number, c: number) => {
+    const merges = parsedData?.merges;
+    if (!merges) return { isMerged: false, isPrimary: false, rowSpan: 1, colSpan: 1 };
+
+    for (const merge of merges) {
+        if (r >= merge.s.r && r <= merge.e.r && c >= merge.s.c && c <= merge.e.c) {
+            if (r === merge.s.r && c === merge.s.c) {
+                return {
+                    isMerged: true,
+                    isPrimary: true,
+                    rowSpan: merge.e.r - merge.s.r + 1,
+                    colSpan: merge.e.c - merge.s.c + 1,
+                };
+            }
+            return {
+                isMerged: true,
+                isPrimary: false,
+                rowSpan: 1,
+                colSpan: 1,
+            };
+        }
+    }
+
+    return { isMerged: false, isPrimary: false, rowSpan: 1, colSpan: 1 };
+  };
+
   const renderContent = () => {
     if (isParsing) {
       return <div className="text-center p-8"><p className="text-lg text-slate-500">正在解析您的文件...</p></div>;
@@ -161,6 +218,82 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
           <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".xlsx, .xls, .csv" />
         </div>
       );
+    }
+
+    const tableView = (
+        <div ref={tableContainerRef} onScroll={!isMaximized ? handleScroll : undefined} className={`overflow-y-auto overflow-x-auto border border-slate-200 rounded-lg bg-white ${isMaximized ? '' : 'h-[480px]'}`}>
+            <table className="min-w-full text-sm divide-y divide-slate-200 border-collapse">
+                <thead className="bg-slate-50 sticky top-0 z-10">
+                    <tr>
+                        <th className="px-2 py-2 w-10 bg-slate-100 sticky left-0 z-20"></th>
+                        {parsedData.headers.map((header, c) => (
+                            <th 
+                                key={header} 
+                                className="px-4 py-2 text-left font-semibold text-slate-600 truncate cursor-pointer hover:bg-slate-200"
+                                onClick={() => handleColumnHeaderClick(c)}
+                            >
+                                {header}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                    {previewRows.map((row, r) => (
+                        <tr key={r} className="hover:bg-slate-50">
+                            <td 
+                                className="px-2 py-2 text-center font-mono text-slate-500 bg-slate-100 sticky left-0 z-0 cursor-pointer hover:bg-slate-200"
+                                onClick={() => handleRowHeaderClick(r)}
+                            >
+                                {r + 1}
+                            </td>
+                            {parsedData.headers.map((header, c) => {
+                                const mergeInfo = getMergeInfo(r, c);
+                                if (mergeInfo.isMerged && !mergeInfo.isPrimary) {
+                                    return null;
+                                }
+
+                                const isSelected = selection.has(`${r},${c}`);
+                                return (
+                                    <td 
+                                        key={header} 
+                                        rowSpan={mergeInfo.rowSpan}
+                                        colSpan={mergeInfo.colSpan}
+                                        className={`px-4 py-2 text-slate-700 whitespace-nowrap truncate max-w-xs cursor-pointer ${isSelected ? 'bg-indigo-200' : ''}`}
+                                        onClick={() => handleCellClick(r, c)}
+                                    >
+                                        {String(row[header] ?? '')}
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            {parsedData && previewRows.length < parsedData.rows.length && (
+                <div className="text-center p-4 text-slate-500 font-semibold">
+                    向下滚动以加载更多...
+                </div>
+            )}
+        </div>
+    );
+
+    if (isMaximized) {
+        return (
+            <div className="fixed inset-0 bg-white z-50 flex flex-col">
+                <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-slate-50">
+                    <div className="flex items-center gap-3">
+                        <button onClick={() => setIsMaximized(false)} className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md">
+                            <ChevronLeftIcon className="h-5 w-5" />
+                        </button>
+                        <ExcelIcon className="h-6 w-6 text-green-600 flex-shrink-0"/>
+                        <p className="font-semibold text-slate-700 truncate">{parsedData.fileName}</p>
+                    </div>
+                </div>
+                <div className="flex-grow p-4 overflow-y-auto" onScroll={handleScroll}>
+                    {tableView}
+                </div>
+            </div>
+        )
     }
 
     return (
@@ -193,54 +326,25 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
           ))}
         </div>
         <div className="mt-4">
-            <h4 className="text-sm font-semibold text-slate-600 mb-2">数据预览 (可滚动，可点击选择)</h4>
-            <div onScroll={handleScroll} className="overflow-y-auto overflow-x-auto border border-slate-200 rounded-lg bg-white h-[480px]">
-                <table className="min-w-full text-sm divide-y divide-slate-200 border-collapse">
-                    <thead className="bg-slate-50 sticky top-0 z-10">
-                        <tr>
-                            <th className="px-2 py-2 w-10 bg-slate-100 sticky left-0 z-20"></th>
-                            {parsedData.headers.map((header, c) => (
-                                <th 
-                                    key={header} 
-                                    className="px-4 py-2 text-left font-semibold text-slate-600 truncate cursor-pointer hover:bg-slate-200"
-                                    onClick={() => handleColumnHeaderClick(c)}
-                                >
-                                    {header}
-                                </th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                        {previewRows.map((row, r) => (
-                            <tr key={r} className="hover:bg-slate-50">
-                                <td 
-                                    className="px-2 py-2 text-center font-mono text-slate-500 bg-slate-100 sticky left-0 z-0 cursor-pointer hover:bg-slate-200"
-                                    onClick={() => handleRowHeaderClick(r)}
-                                >
-                                    {r + 1}
-                                </td>
-                                {parsedData.headers.map((header, c) => {
-                                    const isSelected = selection.has(`${r},${c}`);
-                                    return (
-                                        <td 
-                                            key={header} 
-                                            className={`px-4 py-2 text-slate-700 whitespace-nowrap truncate max-w-xs cursor-pointer ${isSelected ? 'bg-indigo-200' : ''}`}
-                                            onClick={() => handleCellClick(r, c)}
-                                        >
-                                            {String(row[header] ?? '')}
-                                        </td>
-                                    );
-                                })}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {parsedData && previewRows.length < parsedData.rows.length && (
-                    <div className="text-center p-4 text-slate-500 font-semibold">
-                        向下滚动以加载更多...
+            <div className="flex justify-between items-center mb-2">
+                <h4 className="text-sm font-semibold text-slate-600">数据预览 (可滚动，可点击选择)</h4>
+                <div className="flex items-center gap-2">
+                    <div className="relative">
+                        <SearchIcon className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <input
+                            type="text"
+                            placeholder="搜索..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="pl-8 pr-2 py-1 w-48 border border-slate-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                        />
                     </div>
-                )}
+                    <button onClick={() => setIsMaximized(true)} className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md">
+                        <FullScreenIcon className="h-5 w-5" />
+                    </button>
+                </div>
             </div>
+            {tableView}
         </div>
       </div>
     );

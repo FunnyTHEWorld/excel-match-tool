@@ -4,8 +4,10 @@ export type ExcelRow = { [key: string]: string | number | boolean | null };
 export interface ParsedExcelData {
   headers: string[];
   rows: ExcelRow[];
+  rawData: any[][];
   fileName: string;
   merges?: { s: { r: number; c: number }; e: { r: number; c: number } }[];
+  dataValidations?: any[];
 }
 
 export interface MismatchedData {
