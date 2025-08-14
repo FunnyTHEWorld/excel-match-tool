@@ -1,7 +1,8 @@
 import React, { useState, useCallback } from 'react';
-import type { ParsedExcelData, Report, ExcelRow, ColumnSelectorSpec, MismatchedData } from './types';
+import type { ParsedExcelData, Report, ExcelRow, ColumnSelectorSpec, MismatchedData, CellSelection } from './types';
 import ExcelProcessorPanel from './components/ExcelProcessorPanel';
 import ReportModal from './components/ReportModal';
+import { ChatPanel } from './components/ChatPanel';
 import { ProcessingSpinner, DownloadIcon } from './components/icons';
 
 // XLSX is globally available from the script tag in index.html
@@ -39,6 +40,9 @@ function App() {
   const [report, setReport] = useState<Report | null>(null);
   const [showReport, setShowReport] = useState(false);
   const [isAuditMode, setIsAuditMode] = useState(false);
+
+  const [selectionA, setSelectionA] = useState<CellSelection>(new Set());
+  const [selectionB, setSelectionB] = useState<CellSelection>(new Set());
   
   const isProcessReady = leftData && rightData && a1 && a2 && b1 && b2;
 
@@ -224,23 +228,37 @@ function App() {
         </header>
 
         <main className="space-y-8">
-          <div className="flex flex-col lg:flex-row gap-8 items-start">
-            <ExcelProcessorPanel
-              title="表格 A (目标)"
-              onFileParsed={handleLeftFileParsed}
-              onClear={handleLeftClear}
-              parsedData={leftData}
-              columnSelectors={leftColumnSelectors}
-              bgColor="bg-white"
-            />
-            <ExcelProcessorPanel
-              title="表格 B (源)"
-              onFileParsed={handleRightFileParsed}
-              onClear={handleRightClear}
-              parsedData={rightData}
-              columnSelectors={rightColumnSelectors}
-              bgColor="bg-white"
-            />
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
+            <div className="xl:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+              <ExcelProcessorPanel
+                title="表格 A (目标)"
+                onFileParsed={handleLeftFileParsed}
+                onClear={handleLeftClear}
+                parsedData={leftData}
+                columnSelectors={leftColumnSelectors}
+                selection={selectionA}
+                onSelectionChange={setSelectionA}
+                bgColor="bg-white"
+              />
+              <ExcelProcessorPanel
+                title="表格 B (源)"
+                onFileParsed={handleRightFileParsed}
+                onClear={handleRightClear}
+                parsedData={rightData}
+                columnSelectors={rightColumnSelectors}
+                selection={selectionB}
+                onSelectionChange={setSelectionB}
+                bgColor="bg-white"
+              />
+            </div>
+            <div className="xl:col-span-1">
+              <ChatPanel 
+                leftData={leftData}
+                rightData={rightData}
+                selectionA={selectionA}
+                selectionB={selectionB}
+              />
+            </div>
           </div>
 
           <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">

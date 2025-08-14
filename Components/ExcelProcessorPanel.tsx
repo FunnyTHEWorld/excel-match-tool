@@ -1,6 +1,6 @@
 
-import React, { useState, useRef, useCallback, ChangeEvent } from 'react';
-import type { ParsedExcelData, ExcelRow, ColumnSelectorSpec } from '../types';
+import React, { useState, useRef, useCallback, ChangeEvent, useEffect } from 'react';
+import type { ParsedExcelData, ExcelRow, ColumnSelectorSpec, CellSelection } from '../types';
 import { UploadIcon, ExcelIcon, XIcon } from './icons';
 
 // XLSX is globally available from the script tag in index.html
@@ -12,13 +12,79 @@ interface ExcelProcessorPanelProps {
   onClear: () => void;
   parsedData: ParsedExcelData | null;
   columnSelectors: ColumnSelectorSpec[];
+  selection: CellSelection;
+  onSelectionChange: (selection: CellSelection) => void;
   bgColor: string;
 }
 
-const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFileParsed, onClear, parsedData, columnSelectors, bgColor }) => {
+const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFileParsed, onClear, parsedData, columnSelectors, selection, onSelectionChange, bgColor }) => {
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [previewRows, setPreviewRows] = useState<ExcelRow[]>([]);
+
+  const PREVIEW_INITIAL_LOAD = 300;
+  const PREVIEW_LOAD_MORE = 300;
+
+  useEffect(() => {
+    if (parsedData) {
+      setPreviewRows(parsedData.rows.slice(0, PREVIEW_INITIAL_LOAD));
+    } else {
+      setPreviewRows([]);
+    }
+  }, [parsedData]);
+
+  const handleCellClick = (r: number, c: number) => {
+    const newSelection = new Set(selection);
+    const key = `${r},${c}`;
+    if (newSelection.has(key)) {
+        newSelection.delete(key);
+    } else {
+        newSelection.add(key);
+    }
+    onSelectionChange(newSelection);
+  };
+
+  const handleColumnHeaderClick = (c: number) => {
+      const newSelection = new Set(selection);
+      const isSelected = parsedData?.rows.every((_, r) => newSelection.has(`${r},${c}`));
+      
+      parsedData?.rows.forEach((_, r) => {
+          const key = `${r},${c}`;
+          if (isSelected) {
+              newSelection.delete(key);
+          } else {
+              newSelection.add(key);
+          }
+      });
+      onSelectionChange(newSelection);
+  };
+
+  const handleRowHeaderClick = (r: number) => {
+      const newSelection = new Set(selection);
+      const isSelected = parsedData?.headers.every((_, c) => newSelection.has(`${r},${c}`));
+
+      parsedData?.headers.forEach((_, c) => {
+          const key = `${r},${c}`;
+          if (isSelected) {
+              newSelection.delete(key);
+          } else {
+              newSelection.add(key);
+          }
+      });
+      onSelectionChange(newSelection);
+  };
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+      // Load more when nearing the bottom of the scroll area
+      if (scrollHeight - scrollTop < clientHeight + 100) {
+          if (parsedData && previewRows.length < parsedData.rows.length) {
+              const nextRows = parsedData.rows.slice(previewRows.length, previewRows.length + PREVIEW_LOAD_MORE);
+              setPreviewRows(prev => [...prev, ...nextRows]);
+          }
+      }
+  };
 
   const handleFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -100,7 +166,7 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
     return (
       <div className="p-4 space-y-4">
         <div className="flex items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200">
-            <div class="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
                 <ExcelIcon className="h-6 w-6 text-green-600 flex-shrink-0"/>
                 <p className="font-semibold text-slate-700 truncate">{parsedData.fileName}</p>
             </div>
@@ -127,22 +193,53 @@ const ExcelProcessorPanel: React.FC<ExcelProcessorPanelProps> = ({ title, onFile
           ))}
         </div>
         <div className="mt-4">
-            <h4 className="text-sm font-semibold text-slate-600 mb-2">数据预览 (前 5 行)</h4>
-            <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
-                <table className="min-w-full text-sm divide-y divide-slate-200">
-                    <thead className="bg-slate-50">
+            <h4 className="text-sm font-semibold text-slate-600 mb-2">数据预览 (可滚动，可点击选择)</h4>
+            <div onScroll={handleScroll} className="overflow-y-auto overflow-x-auto border border-slate-200 rounded-lg bg-white h-[480px]">
+                <table className="min-w-full text-sm divide-y divide-slate-200 border-collapse">
+                    <thead className="bg-slate-50 sticky top-0 z-10">
                         <tr>
-                            {parsedData.headers.map(header => <th key={header} className="px-4 py-2 text-left font-semibold text-slate-600 truncate">{header}</th>)}
+                            <th className="px-2 py-2 w-10 bg-slate-100 sticky left-0 z-20"></th>
+                            {parsedData.headers.map((header, c) => (
+                                <th 
+                                    key={header} 
+                                    className="px-4 py-2 text-left font-semibold text-slate-600 truncate cursor-pointer hover:bg-slate-200"
+                                    onClick={() => handleColumnHeaderClick(c)}
+                                >
+                                    {header}
+                                </th>
+                            ))}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                        {parsedData.rows.slice(0, 5).map((row, rowIndex) => (
-                            <tr key={rowIndex} className="hover:bg-slate-50">
-                                {parsedData.headers.map(header => <td key={header} className="px-4 py-2 text-slate-700 whitespace-nowrap truncate max-w-xs">{String(row[header] ?? '')}</td>)}
+                        {previewRows.map((row, r) => (
+                            <tr key={r} className="hover:bg-slate-50">
+                                <td 
+                                    className="px-2 py-2 text-center font-mono text-slate-500 bg-slate-100 sticky left-0 z-0 cursor-pointer hover:bg-slate-200"
+                                    onClick={() => handleRowHeaderClick(r)}
+                                >
+                                    {r + 1}
+                                </td>
+                                {parsedData.headers.map((header, c) => {
+                                    const isSelected = selection.has(`${r},${c}`);
+                                    return (
+                                        <td 
+                                            key={header} 
+                                            className={`px-4 py-2 text-slate-700 whitespace-nowrap truncate max-w-xs cursor-pointer ${isSelected ? 'bg-indigo-200' : ''}`}
+                                            onClick={() => handleCellClick(r, c)}
+                                        >
+                                            {String(row[header] ?? '')}
+                                        </td>
+                                    );
+                                })}
                             </tr>
                         ))}
                     </tbody>
                 </table>
+                {parsedData && previewRows.length < parsedData.rows.length && (
+                    <div className="text-center p-4 text-slate-500 font-semibold">
+                        向下滚动以加载更多...
+                    </div>
+                )}
             </div>
         </div>
       </div>

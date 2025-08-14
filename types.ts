@@ -27,6 +27,8 @@ export interface Report {
   b2_header?: string;
 }
 
+export type CellSelection = Set<string>; // Set of cell coordinates, e.g., "r,c"
+
 export interface ColumnSelectorSpec {
   id: string;
   label: string;
