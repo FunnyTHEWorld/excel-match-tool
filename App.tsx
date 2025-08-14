@@ -3,7 +3,7 @@ import type { ParsedExcelData, Report, ExcelRow, ColumnSelectorSpec, MismatchedD
 import ExcelProcessorPanel from './components/ExcelProcessorPanel';
 import ReportModal from './components/ReportModal';
 import { ChatPanel } from './components/ChatPanel';
-import { ProcessingSpinner, DownloadIcon } from './components/icons';
+import { ProcessingSpinner, DownloadIcon, ChevronLeftIcon } from './components/icons';
 
 // XLSX is globally available from the script tag in index.html
 declare var XLSX: any;
@@ -43,6 +43,7 @@ function App() {
 
   const [selectionA, setSelectionA] = useState<CellSelection>(new Set());
   const [selectionB, setSelectionB] = useState<CellSelection>(new Set());
+  const [isChatPanelCollapsed, setIsChatPanelCollapsed] = useState(false);
   
   const isProcessReady = leftData && rightData && a1 && a2 && b1 && b2;
 
@@ -274,7 +275,7 @@ function App() {
 
         <main className="space-y-8">
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
-            <div className="xl:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+            <div className={`${isChatPanelCollapsed ? 'xl:col-span-3' : 'xl:col-span-2'} grid grid-cols-1 lg:grid-cols-2 gap-8 items-start transition-all duration-300`}>
               <ExcelProcessorPanel
                 title="表格 A (目标)"
                 onFileParsed={handleLeftFileParsed}
@@ -296,13 +297,25 @@ function App() {
                 bgColor="bg-white"
               />
             </div>
-            <div className="xl:col-span-1">
-              <ChatPanel 
-                leftData={leftData}
-                rightData={rightData}
-                selectionA={selectionA}
-                selectionB={selectionB}
-              />
+            <div className={`${isChatPanelCollapsed ? 'xl:col-span-0' : 'xl:col-span-1'} transition-all duration-300`}>
+                {isChatPanelCollapsed ? (
+                    <button 
+                        onClick={() => setIsChatPanelCollapsed(false)} 
+                        className="bg-white rounded-xl shadow-lg border border-slate-200 p-2 hover:bg-slate-100 transition-colors fixed right-8 top-1/2 -translate-y-1/2 z-10"
+                        title="展开 AI 助手"
+                    >
+                        <ChevronLeftIcon className="h-6 w-6 text-slate-600" />
+                    </button>
+                ) : (
+                    <ChatPanel 
+                        leftData={leftData}
+                        rightData={rightData}
+                        selectionA={selectionA}
+                        selectionB={selectionB}
+                        isCollapsed={isChatPanelCollapsed}
+                        onToggleCollapse={() => setIsChatPanelCollapsed(!isChatPanelCollapsed)}
+                    />
+                )}
             </div>
           </div>
 

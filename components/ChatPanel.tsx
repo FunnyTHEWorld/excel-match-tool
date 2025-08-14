@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { streamChatCompletion } from '../lib/api';
 import type { ParsedExcelData, CellSelection } from '../types';
+import { ChevronRightIcon } from './icons';
 
 const LS_KEY = 'gemini-chat-config';
 
 interface Message {
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'system';
     content: string;
 }
 
@@ -14,6 +15,8 @@ interface ChatPanelProps {
     rightData: ParsedExcelData | null;
     selectionA: CellSelection;
     selectionB: CellSelection;
+    isCollapsed: boolean;
+    onToggleCollapse: () => void;
 }
 
 const formatSelectedData = (data: ParsedExcelData, selection: CellSelection, tableName: string): string => {
@@ -43,10 +46,11 @@ const formatSelectedData = (data: ParsedExcelData, selection: CellSelection, tab
     return `\n## ${tableName} (已选数据)\n${headerLine}\n${separatorLine}\n${bodyLines.join('\n')}`;
 };
 
-export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selectionA, selectionB }) => {
+export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selectionA, selectionB, isCollapsed, onToggleCollapse }) => {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isApiConfigOpen, setIsApiConfigOpen] = useState(true);
 
@@ -60,10 +64,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
   useEffect(() => {
     const savedConfig = localStorage.getItem(LS_KEY);
     if (savedConfig) {
-      const { apiKey, baseUrl, modelName } = JSON.parse(savedConfig);
+      const { apiKey, baseUrl, modelName, systemPrompt } = JSON.parse(savedConfig);
       setApiKey(apiKey || '');
       setBaseUrl(baseUrl || '');
       setModelName(modelName || '');
+      setSystemPrompt(systemPrompt || '');
     }
   }, []);
 
@@ -75,7 +80,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
 
   const handleSaveConfig = () => {
     setIsSaving(true);
-    const config = { apiKey, baseUrl, modelName };
+    const config = { apiKey, baseUrl, modelName, systemPrompt };
     localStorage.setItem(LS_KEY, JSON.stringify(config));
     setTimeout(() => {
         setIsSaving(false);
@@ -102,8 +107,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
     }
 
     const newUserMessage: Message = { role: 'user', content: finalUserInput };
-    const currentMessages = [...messages, newUserMessage];
-    setMessages(currentMessages);
+    
+    const messageHistory: Message[] = [];
+    if (systemPrompt) {
+        messageHistory.push({ role: 'system', content: systemPrompt });
+    }
+    messageHistory.push(...messages, newUserMessage);
+
+    setMessages(prev => [...prev, newUserMessage]);
     setUserInput('');
     setAttachedDataContext('');
     setIsLoading(true);
@@ -111,13 +122,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     await streamChatCompletion({
-        messages: currentMessages,
+        messages: messageHistory,
         apiKey,
         baseUrl,
         modelName,
         onUpdate: (chunk) => {
             setMessages(prev => {
                 const lastMsgIndex = prev.length - 1;
+                if (lastMsgIndex < 0) return [];
                 const updatedMessages = [...prev];
                 updatedMessages[lastMsgIndex] = {
                     ...updatedMessages[lastMsgIndex],
@@ -132,6 +144,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
         onError: (error) => {
             setMessages(prev => {
                 const lastMsgIndex = prev.length - 1;
+                if (lastMsgIndex < 0) return [];
                 const updatedMessages = [...prev];
                 updatedMessages[lastMsgIndex] = {
                     ...updatedMessages[lastMsgIndex],
@@ -148,15 +161,30 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
 
   return (
     <div className="bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[80vh]">
-      <h3 className="text-xl font-bold p-4 border-b border-slate-200 text-slate-800">AI 助手</h3>
+            <div className="flex justify-between items-center p-4 border-b border-slate-200">
+        <h3 className="text-xl font-bold text-slate-800">AI 助手</h3>
+        <button onClick={onToggleCollapse} className="p-1 hover:bg-slate-100 rounded" title="收起面板">
+            <ChevronRightIcon className="h-6 w-6 text-slate-600" />
+        </button>
+      </div>
       
       <div className="border-b border-slate-200 bg-slate-50">
         <button onClick={() => setIsApiConfigOpen(!isApiConfigOpen)} className="w-full p-4 flex justify-between items-center">
-            <h4 className="text-sm font-semibold text-slate-600">API 配置</h4>
+            <h4 className="text-sm font-semibold text-slate-600">API 与系统配置</h4>
             <span className={`transform transition-transform duration-200 ${isApiConfigOpen ? 'rotate-180' : ''}`}>▼</span>
         </button>
         {isApiConfigOpen && (
             <div className="p-4 pt-0 space-y-3">
+                <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">系统提示词 (System Prompt)</label>
+                    <textarea 
+                        value={systemPrompt} 
+                        onChange={e => setSystemPrompt(e.target.value)} 
+                        className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" 
+                        placeholder="在此输入自定义的系统提示词"
+                        rows={3}
+                    />
+                </div>
                 <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">API Key</label>
                     <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded-md shadow-sm text-sm" placeholder="输入您的 API Key"/>
@@ -178,11 +206,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
 
       <div ref={chatContainerRef} className="flex-grow p-4 space-y-4 overflow-y-auto">
         {messages.map((msg, index) => (
-            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`p-3 rounded-lg max-w-lg whitespace-pre-wrap ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-800'}`}>
-                    {msg.content}
+            (msg.role !== 'system') && (
+                <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`p-3 rounded-lg max-w-lg whitespace-pre-wrap ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-800'}`}>
+                        {msg.content}
+                    </div>
                 </div>
-            </div>
+            )
         ))}
       </div>
 
@@ -210,7 +240,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
                 disabled={isLoading}
             />
             <div className="absolute right-2 bottom-2 flex gap-2">
-                 <button onClick={handleAttachData} disabled={!hasSelection || isLoading} className="px-3 py-2 bg-slate-600 text-white font-semibold rounded-lg shadow-md hover:bg-slate-700 disabled:bg-slate-400">
+                <button onClick={handleAttachData} disabled={!hasSelection || isLoading} className="px-3 py-2 bg-slate-600 text-white font-semibold rounded-lg shadow-md hover:bg-slate-700 disabled:bg-slate-400">
                     附加数据
                 </button>
                 <button onClick={handleSendMessage} disabled={isLoading || !userInput.trim()} className="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 disabled:bg-slate-400">
@@ -222,4 +252,3 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ leftData, rightData, selec
     </div>
   );
 };
-
